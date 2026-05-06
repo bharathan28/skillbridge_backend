@@ -18,15 +18,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-a!sm2pj^dz*z)7*__u%9nuafix6_g7_-cu7^q$)3b@ofhy%*lb'
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
 ALLOWED_HOSTS = ['*']
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-]
+
 
 CORS_ALLOW_HEADERS = [
     "content-type",
@@ -63,7 +61,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'skillbridge_backend.urls'
+ROOT_URLCONF = 'config.urls'
 AUTH_USER_MODEL = 'core.User'
 
 TEMPLATES = [
@@ -81,8 +79,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'skillbridge_backend.wsgi.application'
-ASGI_APPLICATION = "skillbridge_backend.asgi.application"
+WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = "config.asgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
