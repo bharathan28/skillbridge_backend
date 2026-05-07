@@ -13,24 +13,31 @@ class User(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["username", "first_name", "last_name"]
+    # username is still required for AbstractUser internals but we generate it automatically
+    # first_name and last_name are optional at signup — filled during profile setup
+    REQUIRED_FIELDS = ["username"]
 
     class Meta:
         db_table = "users"
 
     def __str__(self):
-        return f"{self.get_full_name()} <{self.email}>"
+        return f"{self.get_full_name() or self.username} <{self.email}>"
 
     @property
     def full_name(self):
-        return self.get_full_name() or self.username
+        name = self.get_full_name().strip()
+        return name if name else self.username
 
     @property
     def initials(self):
-        parts = self.get_full_name().split()
+        parts = self.get_full_name().strip().split()
         if len(parts) >= 2:
             return (parts[0][0] + parts[-1][0]).upper()
-        return self.username[:2].upper()
+        return self.username[:2].upper() if self.username else "?"
+
+    @property
+    def is_profile_complete(self):
+        return bool(self.first_name and self.last_name and self.bio)
 
 
 class Skill(models.Model):
@@ -93,9 +100,6 @@ class Match(models.Model):
     def __str__(self):
         return f"{self.user1.username} <-> {self.user2.username} [{self.type}]"
 
-    def get_other_user(self, user):
-        return self.user2 if self.user1 == user else self.user1
-
 
 class SwapChain(models.Model):
     STATUS_CHOICES = [("pending","Pending"),("active","Active"),("completed","Completed"),("cancelled","Cancelled")]
@@ -113,9 +117,6 @@ class SwapChain(models.Model):
     class Meta:
         db_table = "swap_chains"
 
-    def __str__(self):
-        return f"Chain: {self.user1} -> {self.user2} -> {self.user3}"
-
 
 class Message(models.Model):
     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sent_messages")
@@ -127,9 +128,6 @@ class Message(models.Model):
     class Meta:
         db_table = "messages"
         ordering = ["timestamp"]
-
-    def __str__(self):
-        return f"{self.sender.username} -> {self.receiver.username}: {self.content[:50]}"
 
 
 class Session(models.Model):
@@ -153,9 +151,6 @@ class Session(models.Model):
         db_table = "sessions"
         ordering = ["scheduled_at"]
 
-    def __str__(self):
-        return f"Session: {self.host.username} <-> {self.guest.username} @ {self.scheduled_at}"
-
 
 class Rating(models.Model):
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name="ratings")
@@ -168,6 +163,3 @@ class Rating(models.Model):
     class Meta:
         db_table = "ratings"
         unique_together = ("session", "rater")
-
-    def __str__(self):
-        return f"{self.rater.username} rated {self.rated_user.username}: {self.score}/5"
