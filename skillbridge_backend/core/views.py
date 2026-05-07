@@ -1,10 +1,13 @@
 from django.contrib.auth import get_user_model
 from django.db.models import Q, Avg
-from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings as django_settings
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from rest_framework import generics, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Skill, UserSkill, Match, SwapChain, Message, Session, Rating
@@ -16,11 +19,26 @@ from .serializers import (
 
 User = get_user_model()
 
+FRONTEND_URL = getattr(django_settings, 'FRONTEND_URL', 'https://skillbridge-frontend-fawn.vercel.app')
+
+
+def send_email_safe(subject, body, to_email):
+    """Send email silently — never crash the main request."""
+    try:
+        send_mail(
+            subject,
+            body,
+            django_settings.DEFAULT_FROM_EMAIL,
+            [to_email],
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
 class SignupView(generics.CreateAPIView):
-    """POST /api/signup — Register a new user, return JWT tokens."""
     queryset = User.objects.all()
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
@@ -30,6 +48,17 @@ class SignupView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         refresh = RefreshToken.for_user(user)
+
+        # Welcome email
+        send_email_safe(
+            "Welcome to SkillBridge 🎉",
+            f"Hi {user.first_name or user.username},\n\n"
+            "Your SkillBridge account has been created successfully.\n\n"
+            "Start exploring and swapping skills today!\n\n"
+            f"{FRONTEND_URL}\n\n— The SkillBridge Team",
+            user.email,
+        )
+
         return Response({
             "user": UserPublicSerializer(user).data,
             "access": str(refresh.access_token),
@@ -39,7 +68,6 @@ class SignupView(generics.CreateAPIView):
 
 
 class LoginView(APIView):
-    """POST /api/login — Authenticate and return JWT tokens."""
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -61,6 +89,20 @@ class LoginView(APIView):
             return Response({"error": "Account is deactivated."}, status=403)
 
         refresh = RefreshToken.for_user(user)
+
+        # Login notification email
+        from django.utils import timezone
+        now = timezone.now().strftime("%d %b %Y at %H:%M UTC")
+        send_email_safe(
+            "New login to your SkillBridge account",
+            f"Hi {user.first_name or user.username},\n\n"
+            f"A new login was detected on your account on {now}.\n\n"
+            "If this was you, no action is needed.\n"
+            "If you didn't log in, please reset your password immediately.\n\n"
+            f"{FRONTEND_URL}\n\n— The SkillBridge Team",
+            user.email,
+        )
+
         return Response({
             "user": UserPublicSerializer(user).data,
             "access": str(refresh.access_token),
@@ -69,23 +111,91 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
-    """POST /api/logout — Blacklist the refresh token."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
-            refresh_token = request.data["refresh"]
-            token = RefreshToken(refresh_token)
+            token = RefreshToken(request.data["refresh"])
             token.blacklist()
             return Response({"message": "Logged out successfully."})
         except Exception:
             return Response({"error": "Invalid token."}, status=400)
 
 
+class ForgotPasswordView(APIView):
+    """POST /api/forgot-password — Send a password reset link."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").strip().lower()
+        if not email:
+            return Response({"error": "Email is required."}, status=400)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Return success anyway to prevent email enumeration
+            return Response({"message": "If that email exists, a reset link has been sent."})
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        reset_url = f"{FRONTEND_URL}/reset-password?uid={uid}&token={token}"
+
+        send_email_safe(
+            "Reset your SkillBridge password",
+            f"Hi {user.first_name or user.username},\n\n"
+            "You requested a password reset. Click the link below:\n\n"
+            f"{reset_url}\n\n"
+            "This link expires in 24 hours. If you didn't request this, ignore this email.\n\n"
+            "— The SkillBridge Team",
+            user.email,
+        )
+
+        return Response({"message": "If that email exists, a reset link has been sent."})
+
+
+class ResetPasswordView(APIView):
+    """POST /api/reset-password — Confirm password reset with token."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        uid_b64 = request.data.get("uid", "")
+        token = request.data.get("token", "")
+        new_password = request.data.get("password", "")
+
+        if not uid_b64 or not token or not new_password:
+            return Response({"error": "uid, token and password are required."}, status=400)
+
+        if len(new_password) < 8:
+            return Response({"error": "Password must be at least 8 characters."}, status=400)
+
+        try:
+            uid = urlsafe_base64_decode(uid_b64).decode()
+            user = User.objects.get(pk=uid)
+        except (User.DoesNotExist, ValueError, Exception):
+            return Response({"error": "Invalid reset link."}, status=400)
+
+        if not default_token_generator.check_token(user, token):
+            return Response({"error": "Reset link has expired or is invalid."}, status=400)
+
+        user.set_password(new_password)
+        user.save()
+
+        send_email_safe(
+            "Your SkillBridge password was changed",
+            f"Hi {user.first_name or user.username},\n\n"
+            "Your password has been changed successfully.\n\n"
+            "If you didn't do this, contact support immediately.\n\n"
+            "— The SkillBridge Team",
+            user.email,
+        )
+
+        return Response({"message": "Password reset successfully. You can now log in."})
+
+
 # ─── User / Profile ───────────────────────────────────────────────────────────
 
 class MeView(APIView):
-    """GET /api/me — Get current user profile."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -99,7 +209,6 @@ class MeView(APIView):
 
 
 class UserDetailView(generics.RetrieveAPIView):
-    """GET /api/users/<id> — Public profile of any user."""
     queryset = User.objects.all()
     serializer_class = UserPublicSerializer
     permission_classes = [IsAuthenticated]
@@ -108,7 +217,6 @@ class UserDetailView(generics.RetrieveAPIView):
 # ─── Skills ───────────────────────────────────────────────────────────────────
 
 class SkillListView(generics.ListCreateAPIView):
-    """GET /api/skills — List all skills. POST to create a global skill."""
     queryset = Skill.objects.all()
     serializer_class = SkillSerializer
     permission_classes = [IsAuthenticated]
@@ -125,7 +233,6 @@ class SkillListView(generics.ListCreateAPIView):
 
 
 class AddSkillView(generics.CreateAPIView):
-    """POST /api/add-skill — Add a skill to the current user's profile."""
     serializer_class = UserSkillSerializer
     permission_classes = [IsAuthenticated]
 
@@ -134,7 +241,6 @@ class AddSkillView(generics.CreateAPIView):
 
 
 class MySkillsView(generics.ListAPIView):
-    """GET /api/my-skills — Get current user's skills."""
     serializer_class = UserSkillSerializer
     permission_classes = [IsAuthenticated]
 
@@ -143,7 +249,6 @@ class MySkillsView(generics.ListAPIView):
 
 
 class DeleteSkillView(generics.DestroyAPIView):
-    """DELETE /api/my-skills/<id> — Remove a skill from current user."""
     serializer_class = UserSkillSerializer
     permission_classes = [IsAuthenticated]
 
@@ -154,23 +259,19 @@ class DeleteSkillView(generics.DestroyAPIView):
 # ─── Matching ─────────────────────────────────────────────────────────────────
 
 class MatchListView(APIView):
-    """GET /api/matches — Get all matches for current user (direct + AI + chain)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         matches = Match.objects.filter(
             Q(user1=request.user) | Q(user2=request.user)
         ).select_related("user1", "user2", "user1_teach_skill", "user1_learn_skill")
-
         match_type = request.query_params.get("type")
         if match_type:
             matches = matches.filter(type=match_type)
-
         return Response(MatchSerializer(matches, many=True).data)
 
 
 class RunMatchingView(APIView):
-    """POST /api/run-matching — Run AI matching engine for current user."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -179,23 +280,19 @@ class RunMatchingView(APIView):
         all_users = User.objects.exclude(id=request.user.id).prefetch_related("user_skills__skill")
         results = {"direct": [], "ai": [], "chain": []}
 
-        # Direct matches
         direct = find_direct_matches(request.user, all_users)
         for m in direct:
-            match, created = Match.objects.get_or_create(
-                user1=request.user,
-                user2=m["user"],
+            match, _ = Match.objects.get_or_create(
+                user1=request.user, user2=m["user"],
                 defaults={"type": "direct", "similarity_score": 100.0}
             )
             results["direct"].append(MatchSerializer(match).data)
 
-        # AI matches
         try:
             ai_matches = find_ai_matches(request.user, all_users)
             for m in ai_matches:
                 match, created = Match.objects.get_or_create(
-                    user1=request.user,
-                    user2=m["user"],
+                    user1=request.user, user2=m["user"],
                     defaults={"type": "ai", "similarity_score": m["similarity_score"]}
                 )
                 if not created and match.similarity_score != m["similarity_score"]:
@@ -205,7 +302,6 @@ class RunMatchingView(APIView):
         except Exception as e:
             results["ai_error"] = str(e)
 
-        # Chain matches
         chains = find_chain_matches(list(all_users) + [request.user])
         for chain in chains:
             if request.user in chain:
@@ -217,7 +313,6 @@ class RunMatchingView(APIView):
 
 
 class SimilarityScoreView(APIView):
-    """POST /api/similarity — Compute AI similarity between two skill names."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -236,28 +331,23 @@ class SimilarityScoreView(APIView):
 # ─── Swap Requests ────────────────────────────────────────────────────────────
 
 class RequestSwapView(APIView):
-    """POST /api/request-swap — Send a swap request to another user."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         target_id = request.data.get("user_id")
         if not target_id:
             return Response({"error": "user_id is required."}, status=400)
-
         try:
             target = User.objects.get(id=target_id)
         except User.DoesNotExist:
             return Response({"error": "User not found."}, status=404)
-
         if target == request.user:
             return Response({"error": "Cannot request a swap with yourself."}, status=400)
 
         match, created = Match.objects.get_or_create(
-            user1=request.user,
-            user2=target,
+            user1=request.user, user2=target,
             defaults={"status": "pending", "type": request.data.get("type", "direct")}
         )
-
         if not created and match.status == "pending":
             return Response({"message": "Request already sent.", "match": MatchSerializer(match).data})
 
@@ -268,7 +358,6 @@ class RequestSwapView(APIView):
 
 
 class AcceptRequestView(APIView):
-    """POST /api/accept-request — Accept or reject a swap request."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, match_id):
@@ -286,14 +375,12 @@ class AcceptRequestView(APIView):
             match.status = "rejected"
             match.save()
             return Response({"message": "Request rejected.", "match": MatchSerializer(match).data})
-        else:
-            return Response({"error": "action must be 'accept' or 'reject'."}, status=400)
+        return Response({"error": "action must be 'accept' or 'reject'."}, status=400)
 
 
 # ─── Messages ─────────────────────────────────────────────────────────────────
 
 class SendMessageView(generics.CreateAPIView):
-    """POST /api/send-message — Send a chat message."""
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated]
 
@@ -302,7 +389,6 @@ class SendMessageView(generics.CreateAPIView):
 
 
 class ConversationView(APIView):
-    """GET /api/messages/<user_id> — Get chat history with a user."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, user_id):
@@ -310,24 +396,18 @@ class ConversationView(APIView):
             other = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"error": "User not found."}, status=404)
-
         messages = Message.objects.filter(
             Q(sender=request.user, receiver=other) |
             Q(sender=other, receiver=request.user)
         ).order_by("timestamp")
-
-        # Mark incoming as read
         messages.filter(receiver=request.user, is_read=False).update(is_read=True)
-
         return Response(MessageSerializer(messages, many=True).data)
 
 
 class InboxView(APIView):
-    """GET /api/inbox — Get list of conversations (latest message per contact)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # Get all users the current user has chatted with
         contact_ids = Message.objects.filter(
             Q(sender=request.user) | Q(receiver=request.user)
         ).values_list("sender_id", "receiver_id")
@@ -345,13 +425,11 @@ class InboxView(APIView):
                     Q(sender=request.user, receiver=contact) |
                     Q(sender=contact, receiver=request.user)
                 ).order_by("-timestamp").first()
-                unread_count = Message.objects.filter(
-                    sender=contact, receiver=request.user, is_read=False
-                ).count()
+                unread = Message.objects.filter(sender=contact, receiver=request.user, is_read=False).count()
                 contacts.append({
                     "user": UserPublicSerializer(contact).data,
                     "last_message": MessageSerializer(last_msg).data if last_msg else None,
-                    "unread_count": unread_count,
+                    "unread_count": unread,
                 })
             except User.DoesNotExist:
                 pass
@@ -362,7 +440,6 @@ class InboxView(APIView):
 # ─── Sessions ─────────────────────────────────────────────────────────────────
 
 class SessionListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/sessions — List or create sessions."""
     serializer_class = SessionSerializer
     permission_classes = [IsAuthenticated]
 
@@ -378,7 +455,6 @@ class SessionListCreateView(generics.ListCreateAPIView):
 
 
 class SessionDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """GET/PATCH/DELETE /api/sessions/<id>"""
     serializer_class = SessionSerializer
     permission_classes = [IsAuthenticated]
 
@@ -389,7 +465,6 @@ class SessionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class StartSessionView(APIView):
-    """POST /api/sessions/<id>/start — Start a session, get Agora token."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
@@ -410,14 +485,13 @@ class StartSessionView(APIView):
             "session": SessionSerializer(session).data,
             "agora_channel": session.agora_channel,
             "agora_token": token,
-            "agora_app_id": getattr(__import__("django.conf", fromlist=["settings"]).settings, "AGORA_APP_ID", ""),
+            "agora_app_id": getattr(django_settings, "AGORA_APP_ID", ""),
         })
 
 
 # ─── Ratings ──────────────────────────────────────────────────────────────────
 
 class RateUserView(generics.CreateAPIView):
-    """POST /api/rate — Submit a rating after a session."""
     serializer_class = RatingSerializer
     permission_classes = [IsAuthenticated]
 
@@ -426,16 +500,13 @@ class RateUserView(generics.CreateAPIView):
         if session.host != self.request.user and session.guest != self.request.user:
             raise PermissionError("You were not part of this session.")
         rated = session.guest if session.host == self.request.user else session.host
-        rating = serializer.save(rater=self.request.user, rated_user=rated)
-
-        # Update user's average rating
+        serializer.save(rater=self.request.user, rated_user=rated)
         avg = Rating.objects.filter(rated_user=rated).aggregate(Avg("score"))["score__avg"] or 0
         rated.rating = round(avg, 1)
         rated.save()
 
 
 class ChainListView(generics.ListAPIView):
-    """GET /api/chains — Get all chain swaps involving the current user."""
     serializer_class = SwapChainSerializer
     permission_classes = [IsAuthenticated]
 
@@ -445,7 +516,6 @@ class ChainListView(generics.ListAPIView):
 
 
 class AcceptChainView(APIView):
-    """POST /api/chains/<id>/accept — Accept a chain swap."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):

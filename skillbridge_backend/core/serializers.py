@@ -1,29 +1,35 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.db.models import Avg
 from .models import Skill, UserSkill, Match, SwapChain, Message, Session, Rating
+import uuid
 
 User = get_user_model()
 
 
 class UserPublicSerializer(serializers.ModelSerializer):
-    full_name = serializers.ReadOnlyField()
-    initials = serializers.ReadOnlyField()
+    full_name  = serializers.ReadOnlyField()
+    initials   = serializers.ReadOnlyField()
+    is_profile_complete = serializers.SerializerMethodField()
 
     class Meta:
-        model = User
+        model  = User
         fields = ["id", "username", "email", "first_name", "last_name",
-                  "full_name", "initials", "rating", "total_sessions", "bio", "created_at"]
+                  "full_name", "initials", "rating", "total_sessions",
+                  "bio", "created_at", "is_profile_complete"]
         read_only_fields = ["id", "rating", "total_sessions", "created_at"]
+
+    def get_is_profile_complete(self, obj):
+        return bool(obj.first_name and obj.last_name and obj.bio)
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=8)
+    """Only email + password required at sign-up."""
+    password  = serializers.CharField(write_only=True, min_length=8)
     password2 = serializers.CharField(write_only=True)
 
     class Meta:
-        model = User
-        fields = ["username", "email", "password", "password2", "first_name", "last_name"]
+        model  = User
+        fields = ["email", "password", "password2"]
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password2"]:
@@ -32,44 +38,43 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("password2")
+        email    = validated_data["email"].strip().lower()
+        username = email.split("@")[0] + "_" + uuid.uuid4().hex[:4]
         return User.objects.create_user(
-            username=validated_data["username"],
-            email=validated_data["email"],
+            username=username,
+            email=email,
             password=validated_data["password"],
-            first_name=validated_data.get("first_name", ""),
-            last_name=validated_data.get("last_name", ""),
         )
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
-        model = User
+        model  = User
         fields = ["first_name", "last_name", "bio", "profile_picture"]
 
 
 class SkillSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Skill
+        model  = Skill
         fields = ["id", "name", "category", "description", "created_at"]
         read_only_fields = ["id", "created_at"]
 
 
 class UserSkillSerializer(serializers.ModelSerializer):
-    skill = SkillSerializer(read_only=True)
-    skill_id = serializers.PrimaryKeyRelatedField(
-        queryset=Skill.objects.all(), source="skill", write_only=True, required=False
-    )
-    skill_name = serializers.CharField(write_only=True, required=False)
+    skill      = SkillSerializer(read_only=True)
+    skill_id   = serializers.PrimaryKeyRelatedField(
+        queryset=Skill.objects.all(), source="skill", write_only=True, required=False)
+    skill_name     = serializers.CharField(write_only=True, required=False)
     skill_category = serializers.CharField(write_only=True, required=False)
 
     class Meta:
-        model = UserSkill
+        model  = UserSkill
         fields = ["id", "skill", "skill_id", "skill_name", "skill_category",
                   "type", "level", "created_at"]
         read_only_fields = ["id", "created_at"]
 
     def create(self, validated_data):
-        skill_name = validated_data.pop("skill_name", None)
+        skill_name     = validated_data.pop("skill_name", None)
         skill_category = validated_data.pop("skill_category", "other")
         if skill_name and "skill" not in validated_data:
             skill, _ = Skill.objects.get_or_create(
@@ -81,60 +86,57 @@ class UserSkillSerializer(serializers.ModelSerializer):
 
 
 class MatchSerializer(serializers.ModelSerializer):
-    user1 = UserPublicSerializer(read_only=True)
-    user2 = UserPublicSerializer(read_only=True)
+    user1            = UserPublicSerializer(read_only=True)
+    user2            = UserPublicSerializer(read_only=True)
     user1_teach_skill = SkillSerializer(read_only=True)
     user1_learn_skill = SkillSerializer(read_only=True)
 
     class Meta:
-        model = Match
+        model  = Match
         fields = ["id", "user1", "user2", "status", "type", "similarity_score",
                   "user1_teach_skill", "user1_learn_skill", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
 class SwapChainSerializer(serializers.ModelSerializer):
-    user1 = UserPublicSerializer(read_only=True)
-    user2 = UserPublicSerializer(read_only=True)
-    user3 = UserPublicSerializer(read_only=True)
+    user1     = UserPublicSerializer(read_only=True)
+    user2     = UserPublicSerializer(read_only=True)
+    user3     = UserPublicSerializer(read_only=True)
     skill_1to2 = SkillSerializer(read_only=True)
     skill_2to3 = SkillSerializer(read_only=True)
     skill_3to1 = SkillSerializer(read_only=True)
 
     class Meta:
-        model = SwapChain
+        model  = SwapChain
         fields = ["id", "user1", "user2", "user3", "skill_1to2", "skill_2to3",
                   "skill_3to1", "status", "created_at"]
         read_only_fields = ["id", "created_at"]
 
 
 class MessageSerializer(serializers.ModelSerializer):
-    sender = UserPublicSerializer(read_only=True)
-    receiver = UserPublicSerializer(read_only=True)
+    sender      = UserPublicSerializer(read_only=True)
+    receiver    = UserPublicSerializer(read_only=True)
     receiver_id = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.all(), source="receiver", write_only=True
-    )
+        queryset=User.objects.all(), source="receiver", write_only=True)
 
     class Meta:
-        model = Message
+        model  = Message
         fields = ["id", "sender", "receiver", "receiver_id",
                   "content", "timestamp", "is_read"]
         read_only_fields = ["id", "sender", "timestamp"]
 
 
 class SessionSerializer(serializers.ModelSerializer):
-    host = UserPublicSerializer(read_only=True)
-    guest = UserPublicSerializer(read_only=True)
-    skill = SkillSerializer(read_only=True)
+    host     = UserPublicSerializer(read_only=True)
+    guest    = UserPublicSerializer(read_only=True)
+    skill    = SkillSerializer(read_only=True)
     guest_id = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.all(), source="guest", write_only=True
-    )
+        queryset=User.objects.all(), source="guest", write_only=True)
     skill_id = serializers.PrimaryKeyRelatedField(
-        queryset=Skill.objects.all(), source="skill", write_only=True, required=False
-    )
+        queryset=Skill.objects.all(), source="skill", write_only=True, required=False)
 
     class Meta:
-        model = Session
+        model  = Session
         fields = ["id", "match", "host", "guest", "guest_id", "skill", "skill_id",
                   "topic", "scheduled_at", "duration_minutes", "status",
                   "agora_channel", "notes", "created_at"]
@@ -142,10 +144,10 @@ class SessionSerializer(serializers.ModelSerializer):
 
 
 class RatingSerializer(serializers.ModelSerializer):
-    rater = UserPublicSerializer(read_only=True)
+    rater      = UserPublicSerializer(read_only=True)
     rated_user = UserPublicSerializer(read_only=True)
 
     class Meta:
-        model = Rating
+        model  = Rating
         fields = ["id", "session", "rater", "rated_user", "score", "comment", "created_at"]
         read_only_fields = ["id", "rater", "created_at"]

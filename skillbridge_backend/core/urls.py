@@ -1,51 +1,54 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView
-from . import views
+from .views import (
+    SignupView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,
+    MeView, UserDetailView,
+    SkillListView, AddSkillView, MySkillsView, DeleteSkillView,
+    MatchListView, RunMatchingView, SimilarityScoreView,
+    RequestSwapView, AcceptRequestView,
+    SendMessageView, ConversationView, InboxView,
+    SessionListCreateView, SessionDetailView, StartSessionView,
+    RateUserView, ChainListView, AcceptChainView,
+)
 
 urlpatterns = [
-    # ── Auth ──────────────────────────────────────────────
-    path("signup",            views.SignupView.as_view(),          name="signup"),
-    path("login",             views.LoginView.as_view(),           name="login"),
-    path("logout",            views.LogoutView.as_view(),          name="logout"),
-    path("token/refresh",     TokenRefreshView.as_view(),          name="token_refresh"),
+    # Auth
+    path("signup",              SignupView.as_view()),
+    path("login",               LoginView.as_view()),
+    path("logout",              LogoutView.as_view()),
+    path("forgot-password",     ForgotPasswordView.as_view()),
+    path("reset-password",      ResetPasswordView.as_view()),
 
-    # ── User / Profile ────────────────────────────────────
-    path("me",                views.MeView.as_view(),              name="me"),
-    path("users/<int:pk>",    views.UserDetailView.as_view(),      name="user_detail"),
+    # Profile
+    path("me",                  MeView.as_view()),
+    path("users/<int:pk>",      UserDetailView.as_view()),
 
-    # ── Skills ────────────────────────────────────────────
-    path("skills",            views.SkillListView.as_view(),       name="skill_list"),
-    path("add-skill",         views.AddSkillView.as_view(),        name="add_skill"),
-    path("my-skills",         views.MySkillsView.as_view(),        name="my_skills"),
-    path("my-skills/<int:pk>",views.DeleteSkillView.as_view(),     name="delete_skill"),
+    # Skills
+    path("skills",              SkillListView.as_view()),
+    path("add-skill",           AddSkillView.as_view()),
+    path("my-skills",           MySkillsView.as_view()),
+    path("my-skills/<int:pk>",  DeleteSkillView.as_view()),
 
-    # ── Matching ──────────────────────────────────────────
-    path("matches",           views.MatchListView.as_view(),       name="matches"),
-    path("run-matching",      views.RunMatchingView.as_view(),     name="run_matching"),
-    path("similarity",        views.SimilarityScoreView.as_view(), name="similarity"),
+    # Matching
+    path("matches",             MatchListView.as_view()),
+    path("run-matching",        RunMatchingView.as_view()),
+    path("similarity",          SimilarityScoreView.as_view()),
 
-    # ── Swap Requests ─────────────────────────────────────
-    path("request-swap",      views.RequestSwapView.as_view(),     name="request_swap"),
-    path("accept-request/<int:match_id>",
-                              views.AcceptRequestView.as_view(),   name="accept_request"),
+    # Swap requests
+    path("request-swap",        RequestSwapView.as_view()),
+    path("accept-request/<int:match_id>", AcceptRequestView.as_view()),
 
-    # ── Chat / Messages ───────────────────────────────────
-    path("send-message",      views.SendMessageView.as_view(),     name="send_message"),
-    path("inbox",             views.InboxView.as_view(),           name="inbox"),
-    path("messages/<int:user_id>",
-                              views.ConversationView.as_view(),    name="conversation"),
+    # Messages
+    path("send-message",        SendMessageView.as_view()),
+    path("messages/<int:user_id>", ConversationView.as_view()),
+    path("inbox",               InboxView.as_view()),
 
-    # ── Sessions (Video) ──────────────────────────────────
-    path("sessions",          views.SessionListCreateView.as_view(),   name="sessions"),
-    path("sessions/<int:pk>", views.SessionDetailView.as_view(),       name="session_detail"),
-    path("sessions/<int:pk>/start",
-                              views.StartSessionView.as_view(),        name="start_session"),
+    # Sessions
+    path("sessions",            SessionListCreateView.as_view()),
+    path("sessions/<int:pk>",   SessionDetailView.as_view()),
+    path("sessions/<int:pk>/start", StartSessionView.as_view()),
 
-    # ── Chain Swaps ───────────────────────────────────────
-    path("chains",            views.ChainListView.as_view(),           name="chains"),
-    path("chains/<int:pk>/accept",
-                              views.AcceptChainView.as_view(),         name="accept_chain"),
-
-    # ── Ratings ───────────────────────────────────────────
-    path("rate",              views.RateUserView.as_view(),            name="rate"),
+    # Ratings & Chains
+    path("rate",                RateUserView.as_view()),
+    path("chains",              ChainListView.as_view()),
+    path("chains/<int:pk>/accept", AcceptChainView.as_view()),
 ]
